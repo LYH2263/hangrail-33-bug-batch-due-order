@@ -110,12 +110,8 @@ def hang(body: HangRequest, db: Session = Depends(get_db)):
 
 @api_router.post("/hang/batch", response_model=BatchHangResult)
 def hang_batch(body: BatchHangRequest, db: Session = Depends(get_db)):
-    # 空集合直接失败，且在任何写操作之前返回
+    # 空集合直接失败，且在任何写操作之前返回，不写库
     if not body.order_ids:
-        from app.services.batch_order import empty_batch_should_write, empty_marker
-        if empty_batch_should_write():
-            db.add(empty_marker(1, datetime.utcnow()))
-            db.commit()
         raise HTTPException(400, "未选择工单")
 
     unique_ids = list(dict.fromkeys(body.order_ids))
@@ -141,7 +137,7 @@ def hang_batch(body: BatchHangRequest, db: Session = Depends(get_db)):
             continue
         eligible.append(order)
 
-    # 到期早的先套现网：按 due_at 升序逐个 First-Fit
+    # 到期早的先上杆：按 due_at 升序逐个 First-Fit
     from app.services.batch_order import sort_eligible
     eligible = sort_eligible(eligible)
 
@@ -223,25 +219,13 @@ def hang_batch(body: BatchHangRequest, db: Session = Depends(get_db)):
                 )
             )
 
-    # 一次性提交：部分成功时仅落库成功的占位，不因后单失败回滚先成功的工单
-    from app.services.batch_order import rollback_when_mixed
-    successes = sum(1 for it in items if it.success)
-    failures = sum(1 for it in items if not it.success)
-    if rollback_when_mixed(successes, failures):
-        db.rollback()
-        for it in items:
-            if it.success:
-                it.success = False
-                it.reason = "后单失败，本批已回滚"
-                it.rail_id = None
-                it.start_cm = None
-                it.end_cm = None
-    elif any(it.success for it in items):
+    # 一次性提交：允许部分成功，仅落库成功的占位，不因后单失败回滚先成功的工单
+    if any(it.success for it in items):
         db.commit()
 
     succeeded = sum(1 for it in items if it.success)
-    # 结果按票号（工单）稳定排列，便于和提交顺序对照
-    items.sort(key=lambda it: unique_ids.index(it.order_id))
+    # items 保持处理顺序（先校验拒绝、再按 due_at 升序逐个占位），
+    # 成功行的先后与占位图新增段一一对应，不再按提交顺序重排
     return BatchHangResult(
         requested=len(unique_ids),
         succeeded=succeeded,
