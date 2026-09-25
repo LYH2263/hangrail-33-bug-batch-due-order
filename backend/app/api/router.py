@@ -112,10 +112,6 @@ def hang(body: HangRequest, db: Session = Depends(get_db)):
 def hang_batch(body: BatchHangRequest, db: Session = Depends(get_db)):
     # 空集合直接失败，且在任何写操作之前返回
     if not body.order_ids:
-        from app.services.batch_order import empty_batch_should_write, empty_marker
-        if empty_batch_should_write():
-            db.add(empty_marker(1, datetime.utcnow()))
-            db.commit()
         raise HTTPException(400, "未选择工单")
 
     unique_ids = list(dict.fromkeys(body.order_ids))
@@ -224,19 +220,7 @@ def hang_batch(body: BatchHangRequest, db: Session = Depends(get_db)):
             )
 
     # 一次性提交：部分成功时仅落库成功的占位，不因后单失败回滚先成功的工单
-    from app.services.batch_order import rollback_when_mixed
-    successes = sum(1 for it in items if it.success)
-    failures = sum(1 for it in items if not it.success)
-    if rollback_when_mixed(successes, failures):
-        db.rollback()
-        for it in items:
-            if it.success:
-                it.success = False
-                it.reason = "后单失败，本批已回滚"
-                it.rail_id = None
-                it.start_cm = None
-                it.end_cm = None
-    elif any(it.success for it in items):
+    if any(it.success for it in items):
         db.commit()
 
     succeeded = sum(1 for it in items if it.success)

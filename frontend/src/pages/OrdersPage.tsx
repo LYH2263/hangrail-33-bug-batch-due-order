@@ -45,9 +45,7 @@ export default function OrdersPage() {
     const ids = [...picked];
     // 空选中集合：直接失败，不发请求、不写库
     if (ids.length === 0) {
-      try {
-        await api<BatchResult>("/hang/batch", { method: "POST", body: JSON.stringify({ order_ids: [] }) });
-      } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+      setErr("未选择工单");
       return;
     }
     setBusy(true);
